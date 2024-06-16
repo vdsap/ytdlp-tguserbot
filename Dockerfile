@@ -1,10 +1,10 @@
 FROM ubuntu
 LABEL authors="vdsap"
 RUN apt update
-RUN apt install -y python3 ffmpeg python3-pip
+RUN apt install -y python3 ffmpeg
 WORKDIR /usr/src/app
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN apt install < requirement.txt
 
 CMD [ "python3", "./main.py" ]
