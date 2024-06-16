@@ -1,7 +1,7 @@
 FROM ubuntu
 LABEL authors="vdsap"
 RUN apt update
-RUN apt install -y python3 ffmpeg python-pip3
+RUN apt install -y python3 ffmpeg python-pip
 WORKDIR /usr/src/app
 
 COPY requirements.txt ./
