@@ -72,9 +72,12 @@ async def handler(event):
     logging.info(f"File size: {size}MB")
     if size < 2048:
         await mes.edit(f"Video size {size}MB < 2048MB, downloading video...")
-        with yt_dlp.YoutubeDL(ydl_opts) as yt_dl:
-            file_dl = yt_dl.extract_info(url)
-            filename = yt_dl.prepare_filename(file_dl)
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as yt_dl:
+                file_dl = yt_dl.extract_info(url)
+                filename = yt_dl.prepare_filename(file_dl)
+        except Exception as e:
+            await mes.edit(e)
         await mes.edit(f'File size: {size}MB\nSending video...')
         await mes.edit(f"{filename}",file=filename)
         logging.info('Uploaded')
