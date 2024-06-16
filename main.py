@@ -53,12 +53,16 @@ bot_conf = Config()
 bot = TelegramClient('bot', bot_conf.api_id, bot_conf.api_hash).start(bot_token=bot_conf.token)
 yt = yt_dlp.YoutubeDL()
 
+@bot.on(events.NewMessage(pattern="/start*"))
+async def handler(event):
+    await event.reply('Hi, send video_url to start\nI can send videos only smaller 2GB')
 
-@bot.on(events.NewMessage(pattern="/ytdl https://www.youtube.com/*"))
-@bot.on(events.NewMessage(pattern="/ytdl https://youtu.be/*"))
+@bot.on(events.NewMessage(pattern="https://www.youtube.com/*"))
+@bot.on(events.NewMessage(pattern="https://youtu.be/*"))
+@bot.on(events.NewMessage(pattern="https://youtube.com/*"))
 async def handler(event):
     mes = await event.reply("Loading video info...",file='tmp_video.mp4')
-    url = event.text.split()[1]
+    url = event.text
     logging.info(f"Query: {event.text}")
     vid_info = yt.extract_info(url, download=False)
     video_format = format_selector(vid_info)
@@ -67,12 +71,13 @@ async def handler(event):
     size = (format_vid.get('filesize')+format_aud.get('filesize'))//1024//1024
     logging.info(f"File size: {size}MB")
     if size < 2048:
-        await mes.edit("Video size < 2GB, downloading video...")
+        await mes.edit(f"Video size {size}MB < 2048MB, downloading video...")
         with yt_dlp.YoutubeDL(ydl_opts) as yt_dl:
             file_dl = yt_dl.extract_info(url)
             filename = yt_dl.prepare_filename(file_dl)
-        await mes.edit(f'File size: {size}\nSending video...')
+        await mes.edit(f'File size: {size}MB\nSending video...')
         await mes.edit(f"{filename}",file=filename)
+        logging.info('Uploaded')
         remove(filename)
     else:
         logging.warning("File > 2GB")
