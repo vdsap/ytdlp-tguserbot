@@ -1,2 +1,2 @@
-Telethon==1.36.0
-yt-dlp==2024.5.27
+python-Telethon==1.36.0
+python-yt-dlp==2024.5.27
