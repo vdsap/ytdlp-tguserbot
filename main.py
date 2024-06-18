@@ -2,10 +2,9 @@ import logging
 
 import yt_dlp
 from pyrogram import Client, filters
-from pyrogram.handlers import MessageHandler
 from configparser import ConfigParser
 from os import remove
-import asyncio
+import datetime
 
 
 logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s',
@@ -53,9 +52,11 @@ bot_conf = Config()
 bot = Client('bot', api_id=bot_conf.api_id, api_hash=bot_conf.api_hash, bot_token=bot_conf.token)
 yt = yt_dlp.YoutubeDL()
 
-async def progress(current, total, message):
-    if int(f"{current * 100 / total:.0f}")%5 == 0:
+async def progress(current, total, message, dtime):
+    delta = datetime.datetime.now() - dtime
+    if delta.total_seconds() > 5:
         await message.edit_caption(f"{current * 100 / total:.0f}% | {current}/{total}")
+        dtime = datetime.datetime.now()
 
 @bot.on_message(filters.command(["start", "help"]))
 async def start_func(client, message):
@@ -84,7 +85,8 @@ async def youtube_func(client, message):
         except Exception as e:
             await mes.edit(e)
         await mes.edit(f'File size: {size}MB\nSending video...')
-        mes_cap = await message.reply_video(filename,caption=f'File size: {size}MB\nSending video...',progress=progress, progress_args=(mes,),quote=True)
+        dtime = datetime.datetime.now()
+        mes_cap = await message.reply_video(filename,caption=f'File size: {size}MB\nSending video...',progress=progress, progress_args=(mes,dtime,),quote=True)
         await mes_cap.edit_caption(f'{filename} [{size}MB]')
         remove(filename)
         await mes.delete()
