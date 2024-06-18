@@ -1,2 +1,2 @@
-Telethon==1.36.0
 yt-dlp==2024.5.27
+Pyrogram==2.0.106
