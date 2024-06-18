@@ -57,7 +57,7 @@ yt = yt_dlp.YoutubeDL()
 
 async def progress(current, total, message, dtime):
     text = f"{current * 100 / total:.0f}% | {current/1024//1024:.0f}/{total/1024//1024:.0f}MB"
-    if (datetime.datetime.now() - dtime).total_seconds()%2 == 0:
+    if (datetime.datetime.now() - dtime)>datetime.timedelta(seconds=2):
         try:
             await message.edit_caption(text)
         except errors.MessageNotModified:
@@ -91,7 +91,7 @@ async def youtube_func(client, message):
             await mes.edit(e)
         await mes.edit(f'File size: {size}MB\nSending video...')
         dtime = datetime.datetime.now()
-        mes_cap = await message.reply_video(filename,caption=f'File size: {size}MB\nSending video...',progress=progress, progress_args=(mes,dtime,),quote=True)
+        mes_cap = await message.reply_video(filename,caption=f'File size: {size}MB\nSending video...',progress=progress, progress_args=(mes,datetime.datetime.now(),),quote=True)
         await mes_cap.edit_caption(f'{filename} [{size}MB]')
         remove(filename)
         await mes.delete()
