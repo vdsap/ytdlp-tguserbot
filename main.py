@@ -54,8 +54,8 @@ bot = Client('bot', api_id=bot_conf.api_id, api_hash=bot_conf.api_hash, bot_toke
 yt = yt_dlp.YoutubeDL()
 
 async def progress(current, total, message):
-    await asyncio.sleep(2)
-    await message.edit_caption(f"{current * 100 / total:.1f}% | {current}/{total}")
+    if (current * 100 / total)%5 == 0:
+        await message.edit_caption(f"{current * 100 / total:.1f}% | {current}/{total}")
 
 @bot.on_message(filters.command(["start", "help"]))
 async def start_func(client, message):
