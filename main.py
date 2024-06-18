@@ -52,9 +52,12 @@ bot_conf = Config()
 bot = Client('bot', api_id=bot_conf.api_id, api_hash=bot_conf.api_hash, bot_token=bot_conf.token)
 yt = yt_dlp.YoutubeDL()
 
+
 async def progress(current, total, message, dtime):
-    if (datetime.datetime.now() - dtime).total_seconds()%2 < 0.2:
-        await message.edit_caption(f"{current * 100 / total:.0f}% | {current/1024//1024:.0f}/{total/1024//1024:.0f}MB")
+    text = f"{current * 100 / total:.0f}% | {current/1024//1024:.0f}/{total/1024//1024:.0f}MB"
+    if (datetime.datetime.now() - dtime).total_seconds()%2 < 0.2 and message.text != text:
+        await message.edit_caption(text)
+
 
 @bot.on_message(filters.command(["start", "help"]))
 async def start_func(client, message):
