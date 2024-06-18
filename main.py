@@ -1,11 +1,11 @@
 import logging
-import random
 
 import yt_dlp
-from telethon import TelegramClient, events
+from pyrogram import Client, filters
+from pyrogram.handlers import MessageHandler
 from configparser import ConfigParser
 from os import remove
-
+import asyncio
 
 
 logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s',
@@ -50,20 +50,25 @@ ydl_opts = {
 
 logging.info("Bot starting")
 bot_conf = Config()
-bot = TelegramClient('bot', bot_conf.api_id, bot_conf.api_hash).start(bot_token=bot_conf.token)
+bot = Client('bot', api_id=bot_conf.api_id, api_hash=bot_conf.api_hash, bot_token=bot_conf.token)
 yt = yt_dlp.YoutubeDL()
 
-@bot.on(events.NewMessage(pattern="/start*"))
-async def handler(event):
-    await event.reply('Hi, send video_url to start\nI can send videos only smaller 2GB')
+async def progress(current, total, message):
+    # await asyncio.sleep(3)
+    await message.edit_caption(f"{current * 100 / total:.1f}% | {current}/{total}")
 
-@bot.on(events.NewMessage(pattern="https://www.youtube.com/*"))
-@bot.on(events.NewMessage(pattern="https://youtu.be/*"))
-@bot.on(events.NewMessage(pattern="https://youtube.com/*"))
-async def handler(event):
-    mes = await event.reply("Loading video info...",file='tmp_video.mp4')
-    url = event.text
-    logging.info(f"Query: {event.text}")
+@bot.on_message(filters.command(["start", "help"]))
+async def start_func(client, message):
+    await message.reply_text('Hi, send video_url to start\nI can send videos only smaller 2GB',quote=True)
+    logging.info(f"/start from {message.from_user.first_name} | {message.from_user.id}")
+
+@bot.on_message(filters.regex("https://www.youtube.com/"))
+@bot.on_message(filters.regex("https://youtu.be/*"))
+@bot.on_message(filters.regex("https://youtube.com/*"))
+async def youtube_func(client, message):
+    mes = await message.reply("Loading video info...",quote=True)
+    url = message.text
+    logging.info(f"Query: {message.text}")
     vid_info = yt.extract_info(url, download=False)
     video_format = format_selector(vid_info)
     format_vid = video_format.get('requested_formats')[0]
@@ -79,15 +84,15 @@ async def handler(event):
         except Exception as e:
             await mes.edit(e)
         await mes.edit(f'File size: {size}MB\nSending video...')
-        await mes.edit(f"{filename}",file=filename)
-        logging.info('Uploaded')
+        mes_cap = await message.reply_video(filename,caption=f'File size: {size}MB\nSending video...',progress=progress, progress_args=(mes,),quote=True)
+        await mes_cap.edit_caption(f'{filename} [{size}MB]')
         remove(filename)
+        await mes.delete()
+        logging.info('Uploaded')
     else:
         logging.warning("File > 2GB")
         await mes.delete()
-        await event.reply("Video size > 2GB, can't process")
+        await message.reply("Video size > 2GB, can't process")
 
 
-
-bot.start()
-bot.run_until_disconnected()
+bot.run()
