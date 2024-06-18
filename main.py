@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import yt_dlp
@@ -5,6 +6,7 @@ from pyrogram import Client, filters, errors
 from configparser import ConfigParser
 from os import remove
 import datetime
+import asyncio
 
 
 logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s',
@@ -55,12 +57,11 @@ yt = yt_dlp.YoutubeDL()
 
 async def progress(current, total, message, dtime):
     text = f"{current * 100 / total:.0f}% | {current/1024//1024:.0f}/{total/1024//1024:.0f}MB"
-    if (datetime.datetime.now() - dtime).total_seconds()%2 < 0.2:
+    if (datetime.datetime.now() - dtime).total_seconds()%2 == 0:
         try:
             await message.edit_caption(text)
         except errors.MessageNotModified:
             pass
-
 
 @bot.on_message(filters.command(["start", "help"]))
 async def start_func(client, message):
