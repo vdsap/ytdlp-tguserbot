@@ -8,7 +8,6 @@ from os import remove
 import datetime
 import asyncio
 
-
 logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s',
                     level=logging.INFO)
 
@@ -22,13 +21,15 @@ class Config:
         self.api_id = int(_config["TgBot"]["api_id"])
         self.api_hash = _config["TgBot"]["api_hash"]
 
+
 def format_selector(ctx):
     formats = ctx.get('formats')[::-1]
     best_video = next(f for f in formats
-                        if f['vcodec'] != 'none' and f['acodec'] == 'none' and f['height']<=1080 and f['vcodec'].startswith('avc'))
+                      if f['vcodec'] != 'none' and f['acodec'] == 'none' and f['height'] <= 1080 and f[
+                          'vcodec'].startswith('avc'))
     audio_ext = {'mp4': 'm4a', 'webm': 'webm'}[best_video['ext']]
     best_audio = next(f for f in formats if (
-        f['acodec'] != 'none' and f['vcodec'] == 'none' and f['ext'] == audio_ext))
+            f['acodec'] != 'none' and f['vcodec'] == 'none' and f['ext'] == audio_ext))
     result = {
         'format_id': f'{best_video["format_id"]}+{best_audio["format_id"]}',
         'ext': best_video['ext'],
@@ -38,16 +39,16 @@ def format_selector(ctx):
     logging.info(f"formats: {result["format_id"]}")
     return result
 
+
 def format_yield(ctx):
     yield format_selector(ctx)
 
 
 ydl_opts = {
     'format': format_yield,
-    'restrictfilenames':True,
-    'forcefilename':True,
+    'restrictfilenames': True,
+    'forcefilename': True,
 }
-
 
 logging.info("Bot starting")
 bot_conf = Config()
@@ -56,30 +57,34 @@ yt = yt_dlp.YoutubeDL()
 
 
 async def progress(current, total, message, dtime):
-    text = f"{current * 100 / total:.0f}% | {current/1024//1024:.0f}/{total/1024//1024:.0f}MB"
-    if (datetime.datetime.now() - dtime)>datetime.timedelta(seconds=2):
+    text = f"{current * 100 / total:.0f}% | {current / 1024 // 1024:.0f}/{total / 1024 // 1024:.0f}MB"
+    if (datetime.datetime.now() - dtime).total_seconds() % 2 < 0.1:
         try:
             await message.edit_caption(text)
         except errors.MessageNotModified:
             pass
+        except errors.FloodWait as e:
+            await asyncio.sleep(e.value)
+
 
 @bot.on_message(filters.command(["start", "help"]))
 async def start_func(client, message):
-    await message.reply_text('Hi, send video_url to start\nI can send videos only smaller 2GB',quote=True)
+    await message.reply_text('Hi, send video_url to start\nI can send videos only smaller 2GB', quote=True)
     logging.info(f"/start from {message.from_user.first_name} | {message.from_user.id}")
+
 
 @bot.on_message(filters.regex("https://www.youtube.com/"))
 @bot.on_message(filters.regex("https://youtu.be/*"))
 @bot.on_message(filters.regex("https://youtube.com/*"))
 async def youtube_func(client, message):
-    mes = await message.reply("Loading video info...",quote=True)
+    mes = await message.reply("Loading video info...", quote=True)
     url = message.text
     logging.info(f"Query: {message.text}")
     vid_info = yt.extract_info(url, download=False)
     video_format = format_selector(vid_info)
     format_vid = video_format.get('requested_formats')[0]
     format_aud = video_format.get('requested_formats')[1]
-    size = (format_vid.get('filesize')+format_aud.get('filesize'))//1024//1024
+    size = (format_vid.get('filesize') + format_aud.get('filesize')) // 1024 // 1024
     logging.info(f"File size: {size}MB")
     if size < 2048:
         await mes.edit(f"Video size {size}MB < 2048MB, downloading video...")
@@ -91,7 +96,8 @@ async def youtube_func(client, message):
             await mes.edit(e)
         await mes.edit(f'File size: {size}MB\nSending video...')
         dtime = datetime.datetime.now()
-        mes_cap = await message.reply_video(filename,caption=f'File size: {size}MB\nSending video...',progress=progress, progress_args=(mes,datetime.datetime.now(),),quote=True)
+        mes_cap = await message.reply_video(filename, caption=f'File size: {size}MB\nSending video...',
+                                            progress=progress, progress_args=(mes, dtime,), quote=True)
         await mes_cap.edit_caption(f'{filename} [{size}MB]')
         remove(filename)
         await mes.delete()
