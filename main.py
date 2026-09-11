@@ -306,20 +306,22 @@ async def youtube_func(message: Message):
         await status_msg.edit_text(f"Downloaded ({real_size_mb}MB). Starting upload to Telegram...")
 
         last_up_edit_time = 0.0
-        upload_task: Optional[asyncio.Task] = None
+        in_botapi_transfer = True
 
-        def upload_progress_callback(uploaded: int, total: int):
-            nonlocal last_up_edit_time, upload_task
+        async def upload_progress_callback(uploaded: int, total: int):
+            nonlocal last_up_edit_time, in_botapi_transfer
             now = time.monotonic()
             if total > 0 and (now - last_up_edit_time >= 2.0 or uploaded == total):
-                if upload_task is not None and not upload_task.done():
-                    return
                 last_up_edit_time = now
                 percent = uploaded / total * 100
                 up_mb = uploaded / (1024 * 1024)
                 total_mb = total / (1024 * 1024)
-                text = f"Uploading to Telegram: {percent:.1f}% ({up_mb:.1f}/{total_mb:.1f}MB)"
-                upload_task = asyncio.create_task(safe_edit_message(status_msg, text))
+                if uploaded == total:
+                    in_botapi_transfer = False
+                    text = f"Файл передан в Bot API ({total_mb:.1f}MB). Отправка на серверы Telegram..."
+                else:
+                    text = f"Передача в Bot API: {percent:.1f}% ({up_mb:.1f}/{total_mb:.1f}MB)"
+                await safe_edit_message(status_msg, text)
 
         width, height = await loop.run_in_executor(
             None, lambda: get_video_dimensions(filename, file_dl)
@@ -330,17 +332,38 @@ async def youtube_func(message: Message):
             filename,
             progress_callback=upload_progress_callback
         )
-        await message.reply_video(
-            video=video_file,
-            caption=f"{os.path.basename(filename)} [{real_size_mb}MB]",
-            supports_streaming=True,
-            width=width,
-            height=height,
-            thumbnail=thumb_file
-        )
 
-        if upload_task is not None and not upload_task.done():
-            upload_task.cancel()
+        stop_timer = asyncio.Event()
+        upload_start_time = time.monotonic()
+
+        async def tg_upload_timer():
+            # Ждем завершения передачи в Bot API или 1.5 секунды
+            await asyncio.sleep(1.5)
+            while not stop_timer.is_set():
+                if not in_botapi_transfer:
+                    elapsed = int(time.monotonic() - upload_start_time)
+                    text = f"Отправка на серверы Telegram... ({real_size_mb}MB, прошло {elapsed}с)"
+                    await safe_edit_message(status_msg, text)
+                try:
+                    await asyncio.wait_for(stop_timer.wait(), timeout=2.5)
+                except asyncio.TimeoutError:
+                    pass
+
+        timer_task = asyncio.create_task(tg_upload_timer())
+
+        try:
+            await message.reply_video(
+                video=video_file,
+                caption=f"{os.path.basename(filename)} [{real_size_mb}MB]",
+                supports_streaming=True,
+                width=width,
+                height=height,
+                thumbnail=thumb_file
+            )
+        finally:
+            stop_timer.set()
+            if not timer_task.done():
+                timer_task.cancel()
 
         try:
             os.remove(filename)
