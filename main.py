@@ -1,3 +1,4 @@
+import aiohttp
 import asyncio
 import logging
 import os
@@ -91,6 +92,62 @@ def get_video_dimensions(filename: str, fallback_info: Optional[dict] = None) ->
     return None, None
 
 
+async def extract_thumbnail(thumb_url: Optional[str], video_path: str) -> Optional[str]:
+    base_name = os.path.splitext(video_path)[0]
+    final_thumb_path = f"{base_name}_thumb.jpg"
+    raw_thumb_path = f"{base_name}_thumb.raw"
+    loop = asyncio.get_running_loop()
+
+    # 1. Try downloading original thumbnail from YouTube link
+    if thumb_url:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(thumb_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status == 200:
+                        data = await resp.read()
+                        with open(raw_thumb_path, "wb") as f:
+                            f.write(data)
+
+            if os.path.exists(raw_thumb_path) and os.path.getsize(raw_thumb_path) > 0:
+                cmd = [
+                    'ffmpeg', '-y', '-i', raw_thumb_path,
+                    '-vf', 'scale=w=320:h=320:force_original_aspect_ratio=decrease',
+                    '-frames:v', '1', '-update', '1',
+                    '-q:v', '2',
+                    final_thumb_path
+                ]
+                await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, check=True))
+                if os.path.exists(final_thumb_path) and os.path.getsize(final_thumb_path) <= 200 * 1024:
+                    return final_thumb_path
+        except Exception as e:
+            logging.warning(f"Failed to fetch or process thumbnail from {thumb_url}: {e}")
+        finally:
+            if os.path.exists(raw_thumb_path):
+                try:
+                    os.remove(raw_thumb_path)
+                except Exception:
+                    pass
+
+    # 2. Fallback: extract frame from downloaded video
+    if os.path.exists(video_path):
+        try:
+            cmd = [
+                'ffmpeg', '-y', '-ss', '00:00:01',
+                '-i', video_path,
+                '-vf', 'scale=w=320:h=320:force_original_aspect_ratio=decrease',
+                '-frames:v', '1', '-update', '1',
+                '-q:v', '2',
+                final_thumb_path
+            ]
+            await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, check=True))
+            if os.path.exists(final_thumb_path) and os.path.getsize(final_thumb_path) <= 200 * 1024:
+                return final_thumb_path
+        except Exception as e:
+            logging.warning(f"Failed to extract frame thumbnail from {video_path}: {e}")
+
+    return None
+
+
 class Config:
     def __init__(self):
         logging.info("Init config")
@@ -178,11 +235,15 @@ async def youtube_func(message: Message):
     logging.info(f"Query: {url}")
 
     loop = asyncio.get_running_loop()
+    thumb_path: Optional[str] = None
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as yt:
             vid_info = await loop.run_in_executor(None, lambda: yt.extract_info(url, download=False))
             video_format = format_selector(vid_info)
+            thumb_url = vid_info.get('thumbnail')
+            if not thumb_url and vid_info.get('thumbnails'):
+                thumb_url = vid_info['thumbnails'][-1].get('url')
 
             size_mb = 0
             if isinstance(video_format, dict):
@@ -238,6 +299,9 @@ async def youtube_func(message: Message):
                     filename = base_name + ext
                     break
 
+        thumb_path = await extract_thumbnail(thumb_url, filename)
+        thumb_file = FSInputFile(thumb_path) if thumb_path and os.path.exists(thumb_path) else None
+
         real_size_mb = os.path.getsize(filename) // (1024 * 1024)
         await status_msg.edit_text(f"Downloaded ({real_size_mb}MB). Starting upload to Telegram...")
 
@@ -271,7 +335,8 @@ async def youtube_func(message: Message):
             caption=f"{os.path.basename(filename)} [{real_size_mb}MB]",
             supports_streaming=True,
             width=width,
-            height=height
+            height=height,
+            thumbnail=thumb_file
         )
 
         if upload_task is not None and not upload_task.done():
@@ -282,11 +347,22 @@ async def youtube_func(message: Message):
         except Exception as e:
             logging.error(f"Error removing file {filename}: {e}")
 
+        if thumb_path and os.path.exists(thumb_path):
+            try:
+                os.remove(thumb_path)
+            except Exception as e:
+                logging.error(f"Error removing thumbnail {thumb_path}: {e}")
+
         await status_msg.delete()
         logging.info(f"Successfully sent and removed: {filename}")
 
     except Exception as e:
         logging.exception(f"Error processing video: {e}")
+        if thumb_path and os.path.exists(thumb_path):
+            try:
+                os.remove(thumb_path)
+            except Exception:
+                pass
         try:
             await status_msg.edit_text(f"Error: {str(e)[:250]}")
         except Exception:
