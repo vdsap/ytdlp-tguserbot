@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 LABEL authors="vdsap"
 
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg g++ && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg g++ nodejs && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/app
 

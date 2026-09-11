@@ -27,7 +27,6 @@ class Config:
         self.token = _config["TgBot"]["token"]
         self.api_id = int(_config["TgBot"].get("api_id", 0))
         self.api_hash = _config["TgBot"].get("api_hash", "")
-        # telegram-bot-api URL can be configured or defaulted to container name
         self.api_server = _config["TgBot"].get("api_server", "http://telegram-bot-api:8081")
 
 
@@ -72,11 +71,20 @@ def format_yield(ctx):
     yield format_selector(ctx)
 
 
+DOWNLOAD_DIR = '/var/lib/telegram-bot-api'
+
 ydl_opts = {
     'format': format_yield,
     'restrictfilenames': True,
     'forcefilename': True,
-    'outtmpl': '/usr/src/app/%(title)s.%(ext)s',
+    'outtmpl': f'{DOWNLOAD_DIR}/%(id)s_%(title)s.%(ext)s',
+    'socket_timeout': 30,
+    'retries': 15,
+    'fragment_retries': 15,
+    'file_access_retries': 10,
+    'extractor_retries': 10,
+    'buffersize': 1024 * 16,
+    'http_chunk_size': 10485760,  # 10MB chunk for stabler streaming
 }
 
 cfg = Config()
@@ -88,7 +96,7 @@ async def start_func(message: Message):
     user_name = message.from_user.first_name if message.from_user else "User"
     user_id = message.from_user.id if message.from_user else 0
     logging.info(f"/start from {user_name} | {user_id}")
-    await message.reply("Hi, send a YouTube URL to download.\nLocal bot API allows files up to 2000MB.")
+    await message.reply("Hi! Send a YouTube link to download video (up to 2GB).")
 
 
 @dp.message(F.text.regexp(r'(https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)[^\s]+)'))
@@ -112,18 +120,16 @@ async def youtube_func(message: Message):
                     a_size = req[1].get('filesize') or req[1].get('filesize_approx') or 0
                     size_mb = (v_size + a_size) // (1024 * 1024)
 
-            logging.info(f"Calculated size: {size_mb}MB")
-
+            logging.info(f"Estimated size: {size_mb}MB")
             if size_mb > 2000:
-                await status_msg.edit_text("Video size is larger than 2000MB, cannot process.")
+                await status_msg.edit_text(f"Video size ~{size_mb}MB > 2000MB, cannot process.")
                 return
 
-            await status_msg.edit_text(f"Video size ~{size_mb}MB. Downloading...")
+            await status_msg.edit_text(f"Size ~{size_mb}MB. Downloading video...")
             file_dl = await loop.run_in_executor(None, lambda: yt.extract_info(url, download=True))
             filename = yt.prepare_filename(file_dl)
 
         if not os.path.exists(filename):
-            # Try finding downloaded file if ext differed
             base_name = os.path.splitext(filename)[0]
             for ext in ['.mp4', '.mkv', '.webm']:
                 if os.path.exists(base_name + ext):
@@ -131,25 +137,27 @@ async def youtube_func(message: Message):
                     break
 
         real_size_mb = os.path.getsize(filename) // (1024 * 1024)
-        await status_msg.edit_text(f"File size: {real_size_mb}MB\nUploading video to Telegram via local Bot API...")
+        await status_msg.edit_text(f"Downloaded ({real_size_mb}MB). Sending to Telegram...")
 
+        # FSInputFile in local bot api sends file directly via filesystem
         video_file = FSInputFile(filename)
         await message.reply_video(
             video=video_file,
             caption=f"{os.path.basename(filename)} [{real_size_mb}MB]"
         )
+
         try:
             os.remove(filename)
         except Exception as e:
             logging.error(f"Error removing file {filename}: {e}")
 
         await status_msg.delete()
-        logging.info(f"Successfully uploaded: {filename}")
+        logging.info(f"Successfully sent and removed: {filename}")
 
     except Exception as e:
         logging.exception(f"Error processing video: {e}")
         try:
-            await status_msg.edit_text(f"Error: {str(e)[:200]}")
+            await status_msg.edit_text(f"Error: {str(e)[:250]}")
         except Exception:
             pass
 
