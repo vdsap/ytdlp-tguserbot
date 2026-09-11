@@ -237,7 +237,8 @@ async def youtube_func(message: Message):
         )
         await message.reply_video(
             video=video_file,
-            caption=f"{os.path.basename(filename)} [{real_size_mb}MB]"
+            caption=f"{os.path.basename(filename)} [{real_size_mb}MB]",
+            supports_streaming=True
         )
 
         if upload_task is not None and not upload_task.done():
