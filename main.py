@@ -1,5 +1,6 @@
 import aiohttp
 import asyncio
+import glob
 import logging
 import os
 import re
@@ -8,6 +9,7 @@ import time
 from configparser import ConfigParser
 
 import yt_dlp
+from yt_dlp.utils import DownloadError
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -67,6 +69,36 @@ async def safe_edit_message(msg: Message, text: str):
         logging.debug(f"Failed to edit status message: {e}")
 
 
+def cleanup_files(filename: Optional[str] = None, thumb_path: Optional[str] = None):
+    if thumb_path and os.path.exists(thumb_path):
+        try:
+            os.remove(thumb_path)
+            logging.debug(f"Removed thumbnail {thumb_path}")
+        except Exception as e:
+            logging.debug(f"Error removing thumbnail {thumb_path}: {e}")
+
+    if filename:
+        try:
+            if os.path.exists(filename):
+                os.remove(filename)
+                logging.debug(f"Removed video file {filename}")
+        except Exception as e:
+            logging.debug(f"Error removing file {filename}: {e}")
+
+        base_name = os.path.splitext(filename)[0]
+        for pattern in [f"{base_name}*", f"{filename}*"]:
+            try:
+                for f in glob.glob(pattern):
+                    if f.endswith(('.part', '.ytdl', '.raw', '.temp')):
+                        try:
+                            os.remove(f)
+                            logging.debug(f"Removed partial file {f}")
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+
 async def watch_and_delete_on_delivery(
     bot: Bot,
     status_msg: Message,
@@ -114,19 +146,7 @@ async def watch_and_delete_on_delivery(
                     logging.warning(f"Failed to delete status message {base_id}: {del_err}")
                 break
     finally:
-        if filename and os.path.exists(filename):
-            try:
-                os.remove(filename)
-                logging.info(f"Removed temporary video file: {filename}")
-            except Exception as rem_err:
-                logging.error(f"Error removing file {filename}: {rem_err}")
-
-        if thumb_path and os.path.exists(thumb_path):
-            try:
-                os.remove(thumb_path)
-                logging.info(f"Removed temporary thumbnail: {thumb_path}")
-            except Exception as rem_err:
-                logging.error(f"Error removing thumbnail {thumb_path}: {rem_err}")
+        cleanup_files(filename, thumb_path)
 
 
 def get_video_dimensions(filename: str, fallback_info: Optional[dict] = None) -> tuple[Optional[int], Optional[int]]:
@@ -351,9 +371,22 @@ async def youtube_func(message: Message):
             download_opts['progress_hooks'] = [ytdl_progress_hook]
 
             await status_msg.edit_text(f"Size ~{size_mb}MB. Downloading video...")
-            with yt_dlp.YoutubeDL(download_opts) as yt_dl:
-                file_dl = await loop.run_in_executor(None, lambda: yt_dl.extract_info(url, download=True))
-                filename = yt_dl.prepare_filename(file_dl)
+            try:
+                with yt_dlp.YoutubeDL(download_opts) as yt_dl:
+                    file_dl = await loop.run_in_executor(None, lambda: yt_dl.extract_info(url, download=True))
+                    filename = yt_dl.prepare_filename(file_dl)
+            except DownloadError as dl_err:
+                dl_err_str = str(dl_err).lower()
+                if "403" in dl_err_str and "forbidden" in dl_err_str:
+                    logging.warning(f"403 Forbidden on chunk download for {url}. Retrying without http_chunk_size...")
+                    await safe_edit_message(status_msg, "HTTP 403 Forbidden. Повторная попытка загрузки...")
+                    retry_opts = dict(download_opts)
+                    retry_opts.pop('http_chunk_size', None)
+                    with yt_dlp.YoutubeDL(retry_opts) as retry_yt_dl:
+                        file_dl = await loop.run_in_executor(None, lambda: retry_yt_dl.extract_info(url, download=True))
+                        filename = retry_yt_dl.prepare_filename(file_dl)
+                else:
+                    raise
 
         if not os.path.exists(filename):
             base_name = os.path.splitext(filename)[0]
@@ -428,28 +461,34 @@ async def youtube_func(message: Message):
             if not timer_task.done():
                 timer_task.cancel()
 
-        try:
-            os.remove(filename)
-        except Exception as e:
-            logging.error(f"Error removing file {filename}: {e}")
-
-        if thumb_path and os.path.exists(thumb_path):
-            try:
-                os.remove(thumb_path)
-            except Exception as e:
-                logging.error(f"Error removing thumbnail {thumb_path}: {e}")
-
+        cleanup_files(filename, thumb_path)
         await status_msg.delete()
         logging.info(f"Successfully sent and removed: {filename}")
 
     except Exception as e:
         logging.exception(f"Error processing video: {e}")
+        err_str = str(e).lower()
+
+        if "403" in err_str and "forbidden" in err_str:
+            clean_err = (
+                "⚠️ Ошибка загрузки с YouTube: доступ запрещен (HTTP Error 403: Forbidden).\n\n"
+                "YouTube блокирует скачивание этого видеопотока или требует авторизацию. "
+                "Попробуйте другое видео или повторите попытку позже."
+            )
+            try:
+                await status_msg.edit_text(clean_err)
+            except Exception:
+                pass
+            cleanup_files(filename, thumb_path)
+            return
+
+        err_msg = str(e).strip()
+        display_text = err_msg if err_msg.startswith("ERROR:") else f"Error: {err_msg[:250]}"
         try:
-            await status_msg.edit_text(f"Error: {str(e)[:250]}")
+            await status_msg.edit_text(display_text)
         except Exception:
             pass
 
-        err_str = str(e).lower()
         if "request timeout error" in err_str or "timeout" in err_str:
             logging.info("Request timeout detected. Starting background watcher to delete error message on delivery.")
             asyncio.create_task(
@@ -461,16 +500,7 @@ async def youtube_func(message: Message):
                 )
             )
         else:
-            if thumb_path and os.path.exists(thumb_path):
-                try:
-                    os.remove(thumb_path)
-                except Exception:
-                    pass
-            if filename and os.path.exists(filename):
-                try:
-                    os.remove(filename)
-                except Exception:
-                    pass
+            cleanup_files(filename, thumb_path)
 
 
 async def main():
