@@ -9,4 +9,4 @@ services:
         restart: unless-stopped
         working_dir: /usr/src/app
         volumes:
-          - /main/ytdlp-tguserbot/:/usr/src/app
+          - ./:/usr/src/app

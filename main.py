@@ -9,7 +9,7 @@ import datetime
 import asyncio
 
 logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s',
-                    level=logging.INFO)
+                    level=logging.DEBUG)
 
 
 class Config:
@@ -31,12 +31,12 @@ def format_selector(ctx):
     best_audio = next(f for f in formats if (
             f['acodec'] != 'none' and f['vcodec'] == 'none' and f['ext'] == audio_ext))
     result = {
-        'format_id': f'{best_video["format_id"]}+{best_audio["format_id"]}',
+        'format_id': f"{best_video['format_id']}+{best_audio['format_id']}",
         'ext': best_video['ext'],
         'requested_formats': [best_video, best_audio],
-        'protocol': f'{best_video["protocol"]}+{best_audio["protocol"]}'
+        'protocol': f"{best_video['protocol']}+{best_audio['protocol']}",
     }
-    logging.info(f"formats: {result["format_id"]}")
+    logging.info(f"formats: {result['format_id']}")
     return result
 
 
