@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
     app:
         build:
@@ -10,3 +8,10 @@ services:
         working_dir: /usr/src/app
         volumes:
           - ./:/usr/src/app
+          - /main/docker-compose/tg-botapi/data:/var/lib/telegram-bot-api
+        networks:
+          - telegram-bot-api
+
+networks:
+  telegram-bot-api:
+    external: true
