@@ -15,10 +15,42 @@ from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.types import FSInputFile, Message
 
+from pathlib import Path
+from typing import Any, AsyncGenerator, Callable, Optional, Union
+
 logging.basicConfig(
     format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s',
     level=logging.INFO
 )
+
+
+class ProgressFSInputFile(FSInputFile):
+    def __init__(
+        self,
+        path: Union[str, Path],
+        filename: Optional[str] = None,
+        chunk_size: int = 512 * 1024,
+        progress_callback: Optional[Callable[[int, int], Any]] = None,
+    ):
+        super().__init__(path=path, filename=filename, chunk_size=chunk_size)
+        self.progress_callback = progress_callback
+        try:
+            self.file_size = os.path.getsize(path)
+        except Exception:
+            self.file_size = 0
+
+    async def read(self, bot: Bot) -> AsyncGenerator[bytes, None]:
+        uploaded = 0
+        async for chunk in super().read(bot):
+            uploaded += len(chunk)
+            if self.progress_callback:
+                try:
+                    res = self.progress_callback(uploaded, self.file_size)
+                    if asyncio.iscoroutine(res):
+                        await res
+                except Exception:
+                    pass
+            yield chunk
 
 
 async def safe_edit_message(msg: Message, text: str):
@@ -181,14 +213,35 @@ async def youtube_func(message: Message):
                     break
 
         real_size_mb = os.path.getsize(filename) // (1024 * 1024)
-        await status_msg.edit_text(f"Downloaded ({real_size_mb}MB). Sending to Telegram...")
+        await status_msg.edit_text(f"Downloaded ({real_size_mb}MB). Starting upload to Telegram...")
 
-        # FSInputFile in local bot api sends file directly via filesystem
-        video_file = FSInputFile(filename)
+        last_up_edit_time = 0.0
+        upload_task: Optional[asyncio.Task] = None
+
+        def upload_progress_callback(uploaded: int, total: int):
+            nonlocal last_up_edit_time, upload_task
+            now = time.monotonic()
+            if total > 0 and (now - last_up_edit_time >= 2.0 or uploaded == total):
+                if upload_task is not None and not upload_task.done():
+                    return
+                last_up_edit_time = now
+                percent = uploaded / total * 100
+                up_mb = uploaded / (1024 * 1024)
+                total_mb = total / (1024 * 1024)
+                text = f"Uploading to Telegram: {percent:.1f}% ({up_mb:.1f}/{total_mb:.1f}MB)"
+                upload_task = asyncio.create_task(safe_edit_message(status_msg, text))
+
+        video_file = ProgressFSInputFile(
+            filename,
+            progress_callback=upload_progress_callback
+        )
         await message.reply_video(
             video=video_file,
             caption=f"{os.path.basename(filename)} [{real_size_mb}MB]"
         )
+
+        if upload_task is not None and not upload_task.done():
+            upload_task.cancel()
 
         try:
             os.remove(filename)
