@@ -67,6 +67,68 @@ async def safe_edit_message(msg: Message, text: str):
         logging.debug(f"Failed to edit status message: {e}")
 
 
+async def watch_and_delete_on_delivery(
+    bot: Bot,
+    status_msg: Message,
+    filename: Optional[str],
+    thumb_path: Optional[str],
+    max_wait_seconds: int = 1800,
+):
+    chat_id = status_msg.chat.id
+    base_id = status_msg.message_id
+    start_time = time.monotonic()
+    logging.info(f"Started timeout recovery watcher for status message {base_id} in chat {chat_id}")
+
+    delivered = False
+    try:
+        while time.monotonic() - start_time < max_wait_seconds:
+            await asyncio.sleep(3)
+            # Check range of message IDs after status_msg
+            for check_id in range(base_id + 1, base_id + 15):
+                try:
+                    await bot.edit_message_reply_markup(
+                        chat_id=chat_id,
+                        message_id=check_id,
+                        reply_markup=None
+                    )
+                    delivered = True
+                    break
+                except TelegramBadRequest as err:
+                    err_msg = str(err).lower()
+                    if "message is not modified" in err_msg:
+                        delivered = True
+                        break
+                    elif "message to edit not found" in err_msg:
+                        continue
+                    elif "message can't be edited" in err_msg:
+                        continue
+                except Exception as err:
+                    logging.debug(f"Error checking message {check_id}: {err}")
+
+            if delivered:
+                logging.info(f"Video delivery confirmed for status message {base_id}. Deleting error message...")
+                try:
+                    await status_msg.delete()
+                    logging.info(f"Successfully deleted error status message {base_id}")
+                except Exception as del_err:
+                    logging.warning(f"Failed to delete status message {base_id}: {del_err}")
+                break
+    finally:
+        if filename and os.path.exists(filename):
+            try:
+                os.remove(filename)
+                logging.info(f"Removed temporary video file: {filename}")
+            except Exception as rem_err:
+                logging.error(f"Error removing file {filename}: {rem_err}")
+
+        if thumb_path and os.path.exists(thumb_path):
+            try:
+                os.remove(thumb_path)
+                logging.info(f"Removed temporary thumbnail: {thumb_path}")
+            except Exception as rem_err:
+                logging.error(f"Error removing thumbnail {thumb_path}: {rem_err}")
+
+
 def get_video_dimensions(filename: str, fallback_info: Optional[dict] = None) -> tuple[Optional[int], Optional[int]]:
     try:
         cmd = [
@@ -236,6 +298,7 @@ async def youtube_func(message: Message):
 
     loop = asyncio.get_running_loop()
     thumb_path: Optional[str] = None
+    filename: Optional[str] = None
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as yt:
@@ -381,15 +444,33 @@ async def youtube_func(message: Message):
 
     except Exception as e:
         logging.exception(f"Error processing video: {e}")
-        if thumb_path and os.path.exists(thumb_path):
-            try:
-                os.remove(thumb_path)
-            except Exception:
-                pass
         try:
             await status_msg.edit_text(f"Error: {str(e)[:250]}")
         except Exception:
             pass
+
+        err_str = str(e).lower()
+        if "request timeout error" in err_str or "timeout" in err_str:
+            logging.info("Request timeout detected. Starting background watcher to delete error message on delivery.")
+            asyncio.create_task(
+                watch_and_delete_on_delivery(
+                    bot=message.bot or status_msg.bot,
+                    status_msg=status_msg,
+                    filename=filename,
+                    thumb_path=thumb_path,
+                )
+            )
+        else:
+            if thumb_path and os.path.exists(thumb_path):
+                try:
+                    os.remove(thumb_path)
+                except Exception:
+                    pass
+            if filename and os.path.exists(filename):
+                try:
+                    os.remove(filename)
+                except Exception:
+                    pass
 
 
 async def main():
