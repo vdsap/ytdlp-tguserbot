@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+import subprocess
 import time
 from configparser import ConfigParser
 
@@ -63,6 +64,31 @@ async def safe_edit_message(msg: Message, text: str):
         logging.warning(f"Telegram retry after {e.retry_after}s when editing message")
     except Exception as e:
         logging.debug(f"Failed to edit status message: {e}")
+
+
+def get_video_dimensions(filename: str, fallback_info: Optional[dict] = None) -> tuple[Optional[int], Optional[int]]:
+    try:
+        cmd = [
+            'ffprobe', '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=width,height',
+            '-of', 'csv=s=x:p=0',
+            filename
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        out = res.stdout.strip()
+        if 'x' in out:
+            parts = out.split('x')
+            return int(parts[0]), int(parts[1])
+    except Exception as e:
+        logging.debug(f"ffprobe failed for {filename}: {e}")
+
+    if fallback_info:
+        w = fallback_info.get('width')
+        h = fallback_info.get('height')
+        if w and h:
+            return int(w), int(h)
+    return None, None
 
 
 class Config:
@@ -231,6 +257,11 @@ async def youtube_func(message: Message):
                 text = f"Uploading to Telegram: {percent:.1f}% ({up_mb:.1f}/{total_mb:.1f}MB)"
                 upload_task = asyncio.create_task(safe_edit_message(status_msg, text))
 
+        width, height = await loop.run_in_executor(
+            None, lambda: get_video_dimensions(filename, file_dl)
+        )
+        logging.info(f"Video dimensions: width={width}, height={height}")
+
         video_file = ProgressFSInputFile(
             filename,
             progress_callback=upload_progress_callback
@@ -238,7 +269,9 @@ async def youtube_func(message: Message):
         await message.reply_video(
             video=video_file,
             caption=f"{os.path.basename(filename)} [{real_size_mb}MB]",
-            supports_streaming=True
+            supports_streaming=True,
+            width=width,
+            height=height
         )
 
         if upload_task is not None and not upload_task.done():
