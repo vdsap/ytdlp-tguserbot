@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 from configparser import ConfigParser
 
 import yt_dlp
@@ -10,6 +11,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.types import FSInputFile, Message
 
@@ -17,6 +19,18 @@ logging.basicConfig(
     format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s',
     level=logging.INFO
 )
+
+
+async def safe_edit_message(msg: Message, text: str):
+    try:
+        await msg.edit_text(text)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logging.debug(f"BadRequest editing status message: {e}")
+    except TelegramRetryAfter as e:
+        logging.warning(f"Telegram retry after {e.retry_after}s when editing message")
+    except Exception as e:
+        logging.debug(f"Failed to edit status message: {e}")
 
 
 class Config:
@@ -125,9 +139,39 @@ async def youtube_func(message: Message):
                 await status_msg.edit_text(f"Video size ~{size_mb}MB > 2000MB, cannot process.")
                 return
 
+            last_dl_edit_time = 0.0
+
+            def ytdl_progress_hook(d):
+                nonlocal last_dl_edit_time
+                status = d.get('status')
+                if status == 'downloading':
+                    total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
+                    downloaded = d.get('downloaded_bytes') or 0
+                    now = time.monotonic()
+                    if now - last_dl_edit_time >= 2.0:
+                        last_dl_edit_time = now
+                        if total > 0:
+                            percent = downloaded / total * 100
+                            dl_mb = downloaded / (1024 * 1024)
+                            tot_mb = total / (1024 * 1024)
+                            text = f"Downloading from YouTube: {percent:.1f}% ({dl_mb:.1f}/{tot_mb:.1f}MB)"
+                        else:
+                            dl_mb = downloaded / (1024 * 1024)
+                            text = f"Downloading from YouTube: {dl_mb:.1f}MB"
+                        asyncio.run_coroutine_threadsafe(safe_edit_message(status_msg, text), loop)
+                elif status == 'finished':
+                    asyncio.run_coroutine_threadsafe(
+                        safe_edit_message(status_msg, "Download finished. Processing video..."),
+                        loop
+                    )
+
+            download_opts = dict(ydl_opts)
+            download_opts['progress_hooks'] = [ytdl_progress_hook]
+
             await status_msg.edit_text(f"Size ~{size_mb}MB. Downloading video...")
-            file_dl = await loop.run_in_executor(None, lambda: yt.extract_info(url, download=True))
-            filename = yt.prepare_filename(file_dl)
+            with yt_dlp.YoutubeDL(download_opts) as yt_dl:
+                file_dl = await loop.run_in_executor(None, lambda: yt_dl.extract_info(url, download=True))
+                filename = yt_dl.prepare_filename(file_dl)
 
         if not os.path.exists(filename):
             base_name = os.path.splitext(filename)[0]
